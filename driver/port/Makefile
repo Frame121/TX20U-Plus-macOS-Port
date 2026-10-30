@@ -7,6 +7,14 @@ SYSHOST := usb_shim crypto net net6 ecp256
 OBJ := $(addprefix build/rtw_,$(addsuffix .o,$(RTW))) $(addprefix build/host_,$(addsuffix .o,$(HOST))) $(addprefix build/sys_,$(addsuffix .o,$(SYSHOST)))
 
 all: rtw89d
+
+.PHONY: all clean
+
+# The output directory is not tracked by Git; create it before compiling.
+$(OBJ): | build
+
+build:
+	mkdir -p $@
 rtw89d: $(OBJ)
 	clang -o $@ $(OBJ) -lpthread -framework CoreFoundation -framework IOKit
 build/rtw_regd.o: $(SRC)/regd.c patches/regd_null.sed
