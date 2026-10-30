@@ -12,7 +12,6 @@ permissions:
 
 jobs:
   build-tahoe-intel:
-    # Confirm this hosted runner label is available before relying on CI.
     runs-on: macos-26-intel
     timeout-minutes: 45
     steps:
@@ -36,7 +35,36 @@ jobs:
         run: bash build.sh
       - name: Verify artifacts
         run: |
+          test -s driver/port/rtw89d
+          test -s driver/airport/RTW89Airport.kext/Contents/Info.plist
+          test -s driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          plutil -lint driver/airport/RTW89Airport.kext/Contents/Info.plist
           file driver/port/rtw89d
           file driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
           lipo -info driver/port/rtw89d
           lipo -info driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+      - name: Package compile-test bundle
+        run: |
+          mkdir -p dist/TX20U-Plus-macOS-compile-test
+          cp driver/port/rtw89d dist/TX20U-Plus-macOS-compile-test/
+          ditto driver/airport/RTW89Airport.kext dist/TX20U-Plus-macOS-compile-test/RTW89Airport.kext
+          cp README.md PORTING_ASSESSMENT.md dist/TX20U-Plus-macOS-compile-test/
+          cat > dist/TX20U-Plus-macOS-compile-test/TEST-ONLY.txt <<'EOF'
+          COMPILE-TEST ONLY — NOT A WORKING WI-FI DRIVER.
+          The Airport kext is milestone 0: it registers an IO80211 interface but
+          returns unsupported for every request. Do not install into a production EFI.
+          No physical TX20U Plus hardware test, Wi-Fi scan, association, DHCP or traffic
+          test has been completed. The adapter target is RTL8852A/RTL8852AU (2357:013F).
+          This bundle is x86_64 and was compiled on a macOS 26 Intel GitHub runner.
+          EOF
+          ditto -c -k --sequesterRsrc --keepParent dist/TX20U-Plus-macOS-compile-test dist/TX20U-Plus-macOS-compile-test.zip
+          shasum -a 256 dist/TX20U-Plus-macOS-compile-test.zip > dist/TX20U-Plus-macOS-compile-test.zip.sha256
+      - name: Upload compile-test bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: TX20U-Plus-macOS-compile-test
+          path: |
+            dist/TX20U-Plus-macOS-compile-test.zip
+            dist/TX20U-Plus-macOS-compile-test.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
