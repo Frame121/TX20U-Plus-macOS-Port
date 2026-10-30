@@ -43,6 +43,7 @@ jobs:
           file driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
           lipo -info driver/port/rtw89d
           lipo -info driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          otool -L driver/port/rtw89d
       - name: Package compile-test bundle
         run: |
           mkdir -p dist/TX20U-Plus-macOS-compile-test
@@ -59,6 +60,27 @@ jobs:
           EOF
           ditto -c -k --sequesterRsrc --keepParent dist/TX20U-Plus-macOS-compile-test dist/TX20U-Plus-macOS-compile-test.zip
           shasum -a 256 dist/TX20U-Plus-macOS-compile-test.zip > dist/TX20U-Plus-macOS-compile-test.zip.sha256
+      - name: Package RTL8852AU hardware test kit
+        run: |
+          mkdir -p dist/TX20U-Plus-RTL8852AU-test-kit/scripts dist/TX20U-Plus-RTL8852AU-test-kit/rtw89
+          cp driver/port/rtw89d dist/TX20U-Plus-RTL8852AU-test-kit/
+          cp driver/scripts/fetch-firmware.sh dist/TX20U-Plus-RTL8852AU-test-kit/scripts/
+          cp driver/test/scan.sh dist/TX20U-Plus-RTL8852AU-test-kit/scripts/
+          cp driver/test/README.md dist/TX20U-Plus-RTL8852AU-test-kit/README.md
+          cat > dist/TX20U-Plus-RTL8852AU-test-kit/STATUS.txt <<'EOF'
+          EXPERIMENTAL HARDWARE TEST ONLY.
+          This kit contains the RTL8852A/RTL8852AU userspace backend and IOKit USB shim.
+          It is not a signed installer or a completed native macOS Wi-Fi driver.
+          The TX20U Plus has not yet been tested on macOS Tahoe.
+          The Airport kext is not included because it is an unfinished milestone-0 stub.
+          No EFI changes, SIP changes, or kext installation are required for the scan test.
+          Firmware is downloaded on the test Mac from linux-firmware; see its licence.
+          EOF
+          chmod +x dist/TX20U-Plus-RTL8852AU-test-kit/scripts/*.sh
+          file dist/TX20U-Plus-RTL8852AU-test-kit/rtw89d
+          test -s dist/TX20U-Plus-RTL8852AU-test-kit/scripts/scan.sh
+          ditto -c -k --sequesterRsrc --keepParent dist/TX20U-Plus-RTL8852AU-test-kit dist/TX20U-Plus-RTL8852AU-test-kit.zip
+          shasum -a 256 dist/TX20U-Plus-RTL8852AU-test-kit.zip > dist/TX20U-Plus-RTL8852AU-test-kit.zip.sha256
       - name: Upload compile-test bundle
         uses: actions/upload-artifact@v4
         with:
@@ -66,5 +88,14 @@ jobs:
           path: |
             dist/TX20U-Plus-macOS-compile-test.zip
             dist/TX20U-Plus-macOS-compile-test.zip.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload RTL8852AU hardware test kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: TX20U-Plus-RTL8852AU-test-kit
+          path: |
+            dist/TX20U-Plus-RTL8852AU-test-kit.zip
+            dist/TX20U-Plus-RTL8852AU-test-kit.zip.sha256
           if-no-files-found: error
           retention-days: 14
