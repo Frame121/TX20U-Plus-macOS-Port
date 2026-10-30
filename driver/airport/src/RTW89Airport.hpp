@@ -1,0 +1,89 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Minimal IO80211 (legacy family) controller that presents a Wi-Fi interface to macOS and will forward requests to rtw89d.
+#pragma once
+#include <IOKit/network/IOOutputQueue.h>
+#include "Airport/Apple80211.h"
+#include <IOKit/IOLib.h>
+#include <IOKit/IOCommandGate.h>
+#include <libkern/c++/OSString.h>
+#include <libkern/c++/OSData.h>
+#include <libkern/c++/OSNumber.h>
+#include <libkern/c++/OSBoolean.h>
+#include <libkern/c++/OSDictionary.h>
+#include "rtw89_airport_abi.h"
+
+class RTW89AirportUserClient;
+
+class RTW89AirportInterface : public IO80211Interface {
+	OSDeclareDefaultStructors(RTW89AirportInterface)
+};
+
+class RTW89Airport : public IO80211Controller {
+	OSDeclareDefaultStructors(RTW89Airport)
+public:
+	virtual bool init(OSDictionary *properties) override;
+	virtual void free() override;
+	virtual bool start(IOService *provider) override;
+	virtual void stop(IOService *provider) override;
+	virtual bool createWorkLoop() override;
+	virtual IOWorkLoop *getWorkLoop() const override;
+	virtual IONetworkInterface *createInterface() override;
+	virtual bool configureInterface(IONetworkInterface *netif) override;
+	virtual IOReturn enable(IONetworkInterface *netif) override;
+	virtual IOReturn disable(IONetworkInterface *netif) override;
+	virtual IOReturn getHardwareAddress(IOEthernetAddress *addr) override;
+	virtual IOReturn getHardwareAddressForInterface(IO80211Interface *netif, IOEthernetAddress *addr) override;
+	virtual UInt32 outputPacket(mbuf_t m, void *param) override;
+	virtual SInt32 apple80211Request(unsigned int request_type, int request_number, IO80211Interface *interface, void *data) override;
+	virtual int bpfOutputPacket(OSObject *obj, UInt dlt, mbuf_t m) override;
+	virtual SInt32 apple80211VirtualRequest(UInt request_type, int request_number, IO80211VirtualInterface *interface, void *data) override;
+	virtual SInt32 stopDMA() override;
+	virtual UInt32 hardwareOutputQueueDepth(IO80211Interface *interface) override;
+	virtual SInt32 performCountryCodeOperation(IO80211Interface *interface, IO80211CountryCodeOp op) override;
+	virtual SInt32 enableFeature(IO80211FeatureCode code, void *data) override;
+	virtual SInt32 monitorModeSetEnabled(IO80211Interface *interface, bool enabled, UInt32 dlt) override;
+	virtual IOReturn setProperties(OSObject *properties) override;
+	virtual IOReturn newUserClient(task_t owningTask, void *securityID, UInt32 type, IOUserClient **handler) override;
+	virtual bool useAppleRSNSupplicant(IO80211Interface *interface) override;
+	virtual IOReturn selectMedium(const IONetworkMedium *medium) override;
+	virtual const OSString *newVendorString() const override;
+	virtual const OSString *newModelString() const override;
+
+	SInt32 apple80211RequestImpl(unsigned int request_type, int request_number, IO80211Interface *interface, void *data);
+	bool createMediumTables(const IONetworkMedium **primary);
+	void noteRequest(unsigned type, int num, bool handled);
+
+	static IOReturn linkActionStatic(OSObject *owner, void *arg0, void *arg1, void *arg2, void *arg3);
+	void attachClient(RTW89AirportUserClient *c);
+	void detachClient(RTW89AirportUserClient *c);
+	IOReturn rxFromUser(const void *data, UInt32 len);
+	void setDataActive(bool on);
+	void applyLink(bool up);
+
+private:
+	UInt64 fScanLastReadNs;
+	UInt16 fReqChan[APPLE80211_MAX_CHANNELS];
+	UInt32 fReqFlags[APPLE80211_MAX_CHANNELS];
+	UInt32 fReqNChan;
+	UInt32 fAssocFailSeq;
+	UInt32 fTxCalls, fTxQueued, fRxOk, fRxFail, fBpfCalls, fBpfLastDlt, fBpfQueued;
+	bool queueEthernet(mbuf_t m);
+	void publishDataStats();
+	RTW89AirportUserClient *fClient;
+	bool fDataActive;
+	IO80211P2PInterface *fAwdl, *fP2pDev, *fP2pGo;
+	IOCommandGate *fGate;
+	rtw_link fLink;
+	UInt32 fAssocSeq, fDisassocSeq;
+	UInt32 fVirtCount[2][256];
+	rtw_scan_ent fScan[RTW_AP_MAX_SCAN];
+	UInt32 fScanN, fScanCursor, fScanSeq;
+	bool fScanWrap;
+	apple80211_scan_result fResult;
+	UInt32 fReqCount[2][256];
+	UInt32 fReqUnsup[2][256];
+	UInt32 fPower;
+	IOWorkLoop *fWorkLoop;
+	IO80211Interface *fNetIf;
+	IOEthernetAddress fMac;
+};

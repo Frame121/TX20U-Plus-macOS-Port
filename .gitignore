@@ -1,0 +1,15 @@
+# Local firmware (fetch with driver/scripts/fetch-firmware.sh)
+driver/rtw89/*.bin
+
+# Build outputs
+driver/port/build/
+driver/port/rtw89d
+driver/airport/build/
+driver/airport/RTW89Airport.kext/Contents/MacOS/
+driver/kext/build/
+driver/kext/RTW89Hold.kext/Contents/MacOS/
+
+# Local research/vendor payloads are not part of the distributable port
+references/
+vendor/
+work/

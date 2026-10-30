@@ -1,0 +1,42 @@
+name: Experimental macOS build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "driver/**"
+      - ".github/workflows/macos-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-tahoe-intel:
+    # Confirm this hosted runner label is available before relying on CI.
+    runs-on: macos-26-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify macOS toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun --show-sdk-path
+      - name: Fetch RTL8852A firmware
+        working-directory: driver
+        run: bash scripts/fetch-firmware.sh
+      - name: Build RTL8852A daemon
+        working-directory: driver/port
+        run: |
+          make clean
+          make
+      - name: Build experimental Airport kext
+        working-directory: driver/airport
+        run: bash build.sh
+      - name: Verify artifacts
+        run: |
+          file driver/port/rtw89d
+          file driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          lipo -info driver/port/rtw89d
+          lipo -info driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport

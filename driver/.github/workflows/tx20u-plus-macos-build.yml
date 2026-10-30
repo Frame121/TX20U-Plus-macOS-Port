@@ -1,0 +1,63 @@
+name: TX20U Plus macOS x86_64 build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "port/**"
+      - "airport/**"
+      - "kext/**"
+      - "rtw89/**"
+      - "scripts/fetch-firmware.sh"
+      - ".github/workflows/tx20u-plus-macos-build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build-tahoe-intel:
+    runs-on: macos-26-intel
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Verify toolchain
+        run: |
+          sw_vers
+          uname -m
+          xcodebuild -version
+          xcrun --show-sdk-path
+      - name: Fetch RTL8852A firmware
+        run: bash scripts/fetch-firmware.sh
+      - name: Build rtw89 userspace daemon
+        working-directory: port
+        run: |
+          make clean
+          make
+      - name: Build Airport kext
+        working-directory: airport
+        run: bash ./build.sh
+      - name: Build hold kext
+        working-directory: kext
+        run: bash ./build.sh
+      - name: Verify build products
+        run: |
+          file port/rtw89d
+          file airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          file kext/RTW89Hold.kext/Contents/MacOS/RTW89Hold
+          lipo -info port/rtw89d
+          lipo -info airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          lipo -info kext/RTW89Hold.kext/Contents/MacOS/RTW89Hold
+          codesign --verify --deep --strict airport/RTW89Airport.kext
+          codesign --verify --deep --strict kext/RTW89Hold.kext
+      - name: Upload experimental build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tx20u-plus-macos-tahoe-x86_64-experimental
+          path: |
+            port/rtw89d
+            airport/RTW89Airport.kext
+            kext/RTW89Hold.kext
+          if-no-files-found: error
