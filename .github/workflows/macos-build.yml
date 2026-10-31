@@ -33,22 +33,30 @@ jobs:
       - name: Build experimental Airport kext
         working-directory: driver/airport
         run: bash build.sh
+      - name: Build RTW89Hold kext
+        working-directory: driver/kext
+        run: bash build.sh
       - name: Verify artifacts
         run: |
           test -s driver/port/rtw89d
           test -s driver/airport/RTW89Airport.kext/Contents/Info.plist
           test -s driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          test -s driver/kext/RTW89Hold.kext/Contents/MacOS/RTW89Hold
           plutil -lint driver/airport/RTW89Airport.kext/Contents/Info.plist
+          plutil -lint driver/kext/RTW89Hold.kext/Contents/Info.plist
           file driver/port/rtw89d
           file driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          file driver/kext/RTW89Hold.kext/Contents/MacOS/RTW89Hold
           lipo -info driver/port/rtw89d
           lipo -info driver/airport/RTW89Airport.kext/Contents/MacOS/RTW89Airport
+          lipo -info driver/kext/RTW89Hold.kext/Contents/MacOS/RTW89Hold
           otool -L driver/port/rtw89d
       - name: Package compile-test bundle
         run: |
           mkdir -p dist/TX20U-Plus-macOS-compile-test
           cp driver/port/rtw89d dist/TX20U-Plus-macOS-compile-test/
           ditto driver/airport/RTW89Airport.kext dist/TX20U-Plus-macOS-compile-test/RTW89Airport.kext
+          ditto driver/kext/RTW89Hold.kext dist/TX20U-Plus-macOS-compile-test/RTW89Hold.kext
           cp README.md PORTING_ASSESSMENT.md dist/TX20U-Plus-macOS-compile-test/
           cat > dist/TX20U-Plus-macOS-compile-test/TEST-ONLY.txt <<'EOF'
           COMPILE-TEST ONLY — NOT A WORKING WI-FI DRIVER.

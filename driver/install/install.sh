@@ -15,9 +15,9 @@ else
   rm -f /usr/local/libexec/rtw89/rtw89d
   install -m 755 "$HERE/port/rtw89d" /usr/local/libexec/rtw89/rtw89d
 fi
-install -m 644 "$HERE/rtw89/rtw8852b_fw-2.bin" /usr/local/share/rtw89/
-install -m 644 "$HERE/rtw89/rtw8852b_fw-1.bin" /usr/local/share/rtw89/ 2>/dev/null || true
-install -m 644 "$HERE/rtw89/rtw8852b_fw.bin" /usr/local/share/rtw89/ 2>/dev/null || true
+install -m 644 "$HERE/rtw89/rtw8852a_fw.bin" /usr/local/share/rtw89/
+install -m 644 "$HERE/rtw89/rtw8852a_fw-1.bin" /usr/local/share/rtw89/ 2>/dev/null || true
+# RTL8852A firmware (TX20U Plus) - only two variants
 # the old menu bar app is gone; clean it up if an earlier install left it behind
 rm -rf "/Applications/RTW89 Wi-Fi.app"
 

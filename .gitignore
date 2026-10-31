@@ -13,3 +13,6 @@ driver/kext/RTW89Hold.kext/Contents/MacOS/
 references/
 vendor/
 work/
+
+artifact-*
+
