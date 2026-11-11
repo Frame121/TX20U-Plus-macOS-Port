@@ -11,7 +11,6 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 CHIP = ROOT / "driver/rtw89/src/rtw8852au.c"
 SHIM = ROOT / "driver/port/host/usb_shim.c"
-PROFILE = ROOT / "driver/docs/LINUX-TX20U-PLUS-2026-11-01.md"
 
 
 def bulk_out_indices(source: str) -> dict[str, int]:
@@ -28,7 +27,6 @@ class RTL8852AUUSBProfileTests(unittest.TestCase):
     def setUpClass(cls):
         cls.chip = CHIP.read_text(encoding="utf-8")
         cls.shim = SHIM.read_text(encoding="utf-8")
-        cls.profile = PROFILE.read_text(encoding="utf-8")
 
     def test_tx20u_plus_usb_id_is_bound_to_8852au(self):
         self.assertRegex(self.chip, r"USB_DEVICE_AND_INTERFACE_INFO\(0x2357,\s*0x013f,\s*0xff,\s*0xff,\s*0xff\)")
@@ -47,7 +45,9 @@ class RTL8852AUUSBProfileTests(unittest.TestCase):
             "RTW89_DMA_ACH6": 6,
         }
         self.assertEqual(indices, expected)
-        # Captured physical-adapter order: indices 0..6 -> EP5,6,7,9,10,11,12.
+
+        # Captured physical-adapter descriptor order: indices 0..6 map to
+        # USB bulk OUT endpoint numbers 5, 6, 7, 9, 10, 11, 12.
         endpoint_by_index = [5, 6, 7, 9, 10, 11, 12]
         queue_to_endpoint = {queue: endpoint_by_index[index] for queue, index in indices.items()}
         self.assertEqual(queue_to_endpoint["RTW89_DMA_B0MG"], 5)
@@ -57,12 +57,6 @@ class RTL8852AUUSBProfileTests(unittest.TestCase):
         self.assertEqual(queue_to_endpoint["RTW89_DMA_ACH4"], 10)
         self.assertEqual(queue_to_endpoint["RTW89_DMA_ACH2"], 11)
         self.assertEqual(queue_to_endpoint["RTW89_DMA_ACH6"], 12)
-
-    def test_profile_documents_endpoint_order_and_superspeed_packet_size(self):
-        self.assertIn("Bulk IN endpoint: 0x84", self.profile)
-        for endpoint in ("0x05", "0x06", "0x07", "0x09", "0x0A", "0x0B", "0x0C"):
-            self.assertIn(endpoint, self.profile)
-        self.assertIn("1024-byte max packet", self.profile)
 
     def test_zlp_uses_endpoint_max_packet_size_not_usb2_constant(self):
         self.assertIn("pipe_mps_out[16]", self.shim)

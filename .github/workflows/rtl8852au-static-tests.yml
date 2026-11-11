@@ -1,0 +1,31 @@
+name: RTL8852AU static regression tests
+
+on:
+  push:
+    paths:
+      - "driver/rtw89/src/rtw8852au.c"
+      - "driver/port/host/usb_shim.c"
+      - "driver/test/test_rtl8852au_usb_profile.py"
+      - ".github/workflows/rtl8852au-static-tests.yml"
+  pull_request:
+    paths:
+      - "driver/rtw89/src/rtw8852au.c"
+      - "driver/port/host/usb_shim.c"
+      - "driver/test/test_rtl8852au_usb_profile.py"
+      - ".github/workflows/rtl8852au-static-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check RTL8852AU USB profile contracts
+        run: python -m unittest -v driver.test.test_rtl8852au_usb_profile
