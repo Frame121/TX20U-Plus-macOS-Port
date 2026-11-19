@@ -2,7 +2,13 @@
 # Joins a preferred network through macOS itself (networksetup) when the adapter is not connected.
 # Runs as the logged-in user (it needs that user's Wi-Fi passwords). macOS's own auto-join does not work with this driver
 # ("driver not available"), and joining through networksetup keeps System Settings consistent.
-IF=en3
+IF="${RTW89_IF:-}"
+if [ -z "$IF" ]; then
+	IF=$(networksetup -listallhardwareports 2>/dev/null | awk '/Hardware Port: Wi-Fi/{getline; print $2}')
+fi
+if [ -z "$IF" ]; then
+	IF=en3
+fi
 SOCK=/var/run/rtw89d.sock
 state() { echo status | nc -U $SOCK 2>/dev/null | sed -n 's/.*"state":"\([a-z_]*\)".*/\1/p'; }
 idle=0

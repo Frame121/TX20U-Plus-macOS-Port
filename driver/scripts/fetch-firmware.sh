@@ -7,6 +7,15 @@ BASE="https://gitlab.com/kernel-firmware/linux-firmware/-/raw/main/rtw89"
 for f in rtw8852a_fw.bin rtw8852a_fw-1.bin; do
   if [ ! -s "$f" ] || [ "$(wc -c < "$f")" -lt 500000 ]; then
     rm -f "$f"
+    if [ -f "/lib/firmware/rtw89/$f" ]; then
+      echo "copying $f from /lib/firmware/rtw89/"
+      cp "/lib/firmware/rtw89/$f" "$f"
+    elif [ -f "/lib/firmware/rtw89/$f.zst" ] && command -v zstd >/dev/null 2>&1; then
+      echo "decompressing $f from /lib/firmware/rtw89/$f.zst"
+      zstd -d -k "/lib/firmware/rtw89/$f.zst" -o "$f" || rm -f "$f"
+    fi
+  fi
+  if [ ! -s "$f" ] || [ "$(wc -c < "$f")" -lt 500000 ]; then
     echo "fetching $f"
     curl -fL --retry 3 -o "$f" "$BASE/$f"
   fi

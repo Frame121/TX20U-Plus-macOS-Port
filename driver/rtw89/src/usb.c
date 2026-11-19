@@ -460,16 +460,30 @@ static void rtw89_usb_rx_handler(struct work_struct *work)
 		remaining = rx_skb->len;
 
 		do {
+			u32 frame_end;
+
 			memset(&desc_info, 0, sizeof(desc_info));
 			rtw89_chip_query_rxdesc(rtwdev, &desc_info, pkt_ptr, 0);
 
-			pkt_offset = desc_info.offset + desc_info.rxd_len;
-			if (remaining < (pkt_offset + desc_info.pkt_size)) {
-				rtw89_debug(rtwdev, RTW89_DBG_HCI,
-					    "Failed to get remaining RX pkt %u > %u\n",
-					    pkt_offset + desc_info.pkt_size, remaining);
+			/* Validate untrusted descriptor lengths before pointer arithmetic. */
+			if (!info->rx_agg_alignment || !desc_info.rxd_len ||
+			    !desc_info.pkt_size || desc_info.offset > remaining ||
+			    desc_info.rxd_len > remaining - desc_info.offset) {
+				rtw89_warn(rtwdev,
+					   "invalid RX descriptor offset=%u desc=%u pkt=%u remaining=%d\n",
+					   desc_info.offset, desc_info.rxd_len,
+					   desc_info.pkt_size, remaining);
 				goto free_or_reuse;
 			}
+
+			pkt_offset = desc_info.offset + desc_info.rxd_len;
+			if (desc_info.pkt_size > remaining - pkt_offset) {
+				rtw89_warn(rtwdev,
+					   "truncated RX frame offset=%u pkt=%u remaining=%d\n",
+					   pkt_offset, desc_info.pkt_size, remaining);
+				goto free_or_reuse;
+			}
+			frame_end = pkt_offset + desc_info.pkt_size;
 
 			skb = rtw89_alloc_skb_for_rx(rtwdev, desc_info.pkt_size);
 			if (!skb) {
@@ -482,9 +496,17 @@ static void rtw89_usb_rx_handler(struct work_struct *work)
 			skb_put_data(skb, pkt_ptr + pkt_offset, desc_info.pkt_size);
 			rtw89_core_rx(rtwdev, &desc_info, skb);
 
-			/* next frame */
-			pkt_offset += desc_info.pkt_size;
-			aligned_offset = ALIGN(pkt_offset, info->rx_agg_alignment);
+			/* A final aggregate member may have no trailing alignment bytes. */
+			if (frame_end == remaining)
+				break;
+
+			aligned_offset = ALIGN(frame_end, info->rx_agg_alignment);
+			if (aligned_offset <= 0 || aligned_offset > remaining) {
+				rtw89_warn(rtwdev,
+					   "invalid RX aggregate alignment offset=%d remaining=%d\n",
+					   aligned_offset, remaining);
+				goto free_or_reuse;
+			}
 			pkt_ptr += aligned_offset;
 			remaining -= aligned_offset;
 		} while (remaining > 0);
@@ -931,15 +953,66 @@ static int rtw89_usb_ops_mac_lv1_rcvy(struct rtw89_dev *rtwdev,
 	return 0;
 }
 
+static void rtw89_usb_ops_flush_queues(struct rtw89_dev *rtwdev,
+				       u32 queues, bool drop)
+{
+	struct rtw89_usb *rtwusb = rtw89_usb_priv(rtwdev);
+	int i, retry;
+	bool busy;
+
+	/* Match PCI HCI semantics: wait for data queues to drain; FW command
+	 * channel 12 is intentionally excluded from the mac80211 queue flush.
+	 * Use one global deadline so a stuck device cannot block for 12 seconds. */
+	for (retry = 0; retry < 1000; retry++) {
+		busy = false;
+		for (i = 0; i < RTW89_TXCH_CH12; i++) {
+			if (skb_queue_len(&rtwusb->tx_queue[i]) ||
+			    atomic_read(&rtwusb->tx_inflight[i])) {
+				busy = true;
+				break;
+			}
+		}
+		if (!busy)
+			return;
+		msleep(1);
+	}
+
+	for (i = 0; i < RTW89_TXCH_CH12; i++) {
+		int queued = skb_queue_len(&rtwusb->tx_queue[i]);
+		int inflight = atomic_read(&rtwusb->tx_inflight[i]);
+
+		if (queued || inflight)
+			rtw89_warn(rtwdev,
+				   "USB TX flush timeout ch=%d queued=%d inflight=%d drop=%d queues=0x%x\n",
+				   i, queued, inflight, drop, queues);
+	}
+}
+
 static void rtw89_usb_ops_dump_err_status(struct rtw89_dev *rtwdev)
 {
-	rtw89_warn(rtwdev, "%s TODO\n", __func__);
+	struct rtw89_usb *rtwusb = rtw89_usb_priv(rtwdev);
+	int i;
+
+	rtw89_warn(rtwdev,
+		   "USB status: RX queued=%u free=%u continual_io_error=%d\n",
+		   skb_queue_len(&rtwusb->rx_queue),
+		   skb_queue_len(&rtwusb->rx_free_queue),
+		   atomic_read(&rtwusb->continual_io_error));
+
+	for (i = 0; i < RTW89_TXCH_NUM; i++) {
+		int queued = skb_queue_len(&rtwusb->tx_queue[i]);
+		int inflight = atomic_read(&rtwusb->tx_inflight[i]);
+
+		if (queued || inflight)
+			rtw89_warn(rtwdev, "USB TX ch=%d queued=%d inflight=%d\n",
+				   i, queued, inflight);
+	}
 }
 
 static const struct rtw89_hci_ops rtw89_usb_ops = {
 	.tx_write	= rtw89_usb_ops_tx_write,
 	.tx_kick_off	= rtw89_usb_ops_tx_kick_off,
-	.flush_queues	= NULL, /* Not needed? */
+	.flush_queues	= rtw89_usb_ops_flush_queues,
 	.reset		= rtw89_usb_ops_reset,
 	.start		= rtw89_usb_ops_start,
 	.stop		= rtw89_usb_ops_stop,

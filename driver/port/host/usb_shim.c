@@ -10,6 +10,7 @@
 static IOUSBDeviceInterface942 **g_dev;
 static IOUSBInterfaceInterface942 **g_if;
 static u8 pipe_of_in[16], pipe_of_out[16];
+static u16 pipe_mps_out[16];
 static CFRunLoopRef g_rl;
 static pthread_t g_rl_thr;
 static pthread_mutex_t g_submit_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -118,8 +119,9 @@ static int submit_now(struct urb *urb)
 		/* A transfer that is an exact multiple of the max packet size needs a zero-length packet to terminate it. It must be
 		 * queued right behind the data (callers hold g_submit_lock): sending it after completion lets the next queued
 		 * transfer run into this one, and the chip's host dispatcher reports a payload overflow and halts. */
-		if (r == kIOReturnSuccess && (urb->transfer_flags & URB_ZERO_PACKET) && urb->transfer_buffer_length &&
-		    (urb->transfer_buffer_length % 512) == 0)
+		if (r == kIOReturnSuccess && (urb->transfer_flags & URB_ZERO_PACKET) &&
+		    urb->transfer_buffer_length && pipe_mps_out[ep] &&
+		    (urb->transfer_buffer_length % pipe_mps_out[ep]) == 0)
 			(*g_if)->WritePipeAsync(g_if, pipe_of_out[ep], (void *)urb->transfer_buffer, 0, zlp_cb, NULL);
 		return r;
 	}
@@ -267,53 +269,155 @@ static int open_device(u16 vid, u16 pid)
 int kc_usb_find_and_probe(const struct usb_driver *drv)
 {
 	const struct usb_device_id *id;
+	IOReturn r;
+	UInt8 n = 0, spd = 0;
+	UInt16 v, p;
+	io_iterator_t it;
+	io_service_t s;
+
 	for (id = drv->id_table; id->idVendor; id++)
 		if (open_device(id->idVendor, id->idProduct) == 0)
 			goto found;
 	fprintf(stderr, "usb: no supported adapter found (is it in Wi-Fi mode? run modeswitch3)\n");
 	return -ENODEV;
-found:;
-	/* interface 0 */
-	IOUSBFindInterfaceRequest rq = { kIOUSBFindInterfaceDontCare, kIOUSBFindInterfaceDontCare, kIOUSBFindInterfaceDontCare, kIOUSBFindInterfaceDontCare };
-	io_iterator_t it; (*g_dev)->CreateInterfaceIterator(g_dev, &rq, &it);
-	io_service_t s = IOIteratorNext(it);
-	if (!s) { fprintf(stderr, "usb: no interface\n"); return -ENODEV; }
-	IOCFPlugInInterface **pl; SInt32 sc;
-	IOCreatePlugInInterfaceForService(s, kIOUSBInterfaceUserClientTypeID, kIOCFPlugInInterfaceID, &pl, &sc);
-	(*pl)->QueryInterface(pl, CFUUIDGetUUIDBytes(kIOUSBInterfaceInterfaceID942), (LPVOID *)&g_if);
-	IODestroyPlugInInterface(pl);
-	IOReturn r = (*g_if)->USBInterfaceOpenSeize(g_if);
-	if (r) { fprintf(stderr, "usb: interface open failed 0x%x\n", r); return -EBUSY; }
-	UInt8 n; (*g_if)->GetNumEndpoints(g_if, &n);
-	for (UInt8 i = 1; i <= n && i <= 16; i++) {
-		UInt8 dir, num, tt, in; UInt16 mps;
-		(*g_if)->GetPipeProperties(g_if, i, &dir, &num, &tt, &mps, &in);
-		struct usb_endpoint_descriptor *e = &g_eps[i - 1].desc;
-		e->bLength = 7; e->bDescriptorType = 5;
-		e->bEndpointAddress = num | (dir == kUSBIn ? USB_DIR_IN : 0);
-		e->bmAttributes = tt == kUSBBulk ? USB_ENDPOINT_XFER_BULK : tt == kUSBInterrupt ? USB_ENDPOINT_XFER_INT : 0;
-		e->wMaxPacketSize = mps; e->bInterval = in;
-		if (dir == kUSBIn) pipe_of_in[num] = i; else pipe_of_out[num] = i;
+found:
+	/* Match broadly, then verify interface number after acquiring it. */
+	IOUSBFindInterfaceRequest rq = {
+		kIOUSBFindInterfaceDontCare, kIOUSBFindInterfaceDontCare,
+		kIOUSBFindInterfaceDontCare, kIOUSBFindInterfaceDontCare
+	};
+	r = (*g_dev)->CreateInterfaceIterator(g_dev, &rq, &it);
+	if (r) {
+		fprintf(stderr, "usb: interface iterator failed 0x%x\n", r);
+		goto fail_device;
 	}
+	s = IOIteratorNext(it);
+	IOObjectRelease(it);
+	if (!s) {
+		fprintf(stderr, "usb: interface not found\n");
+		goto fail_device;
+	}
+
+	IOCFPlugInInterface **pl = NULL;
+	SInt32 sc;
+	r = IOCreatePlugInInterfaceForService(s, kIOUSBInterfaceUserClientTypeID,
+					      kIOCFPlugInInterfaceID, &pl, &sc);
+	IOObjectRelease(s);
+	if (r || !pl) {
+		fprintf(stderr, "usb: interface plugin creation failed 0x%x\n", r);
+		goto fail_device;
+	}
+	r = (*pl)->QueryInterface(pl, CFUUIDGetUUIDBytes(kIOUSBInterfaceInterfaceID942),
+				  (LPVOID *)&g_if);
+	IODestroyPlugInInterface(pl);
+	if (r || !g_if) {
+		fprintf(stderr, "usb: interface QueryInterface failed 0x%x\n", r);
+		g_if = NULL;
+		goto fail_device;
+	}
+
+	r = (*g_if)->USBInterfaceOpenSeize(g_if);
+	if (r) {
+		fprintf(stderr, "usb: interface open failed 0x%x\n", r);
+		goto fail_interface;
+	}
+	UInt8 ifnum = 0xff;
+	r = (*g_if)->GetInterfaceNumber(g_if, &ifnum);
+	if (r || ifnum != 0) {
+		fprintf(stderr, "usb: expected interface 0, got %u (status 0x%x)\n", ifnum, r);
+		goto fail_open_interface;
+	}
+	r = (*g_if)->GetNumEndpoints(g_if, &n);
+	if (r || n == 0 || n > 16) {
+		fprintf(stderr, "usb: invalid endpoint count %u (status 0x%x)\n", n, r);
+		goto fail_open_interface;
+	}
+
+	/* Preserve descriptor/pipe order: rtw89_usb_parse() assigns queue indices from it. */
+	memset(pipe_of_in, 0, sizeof pipe_of_in);
+	memset(pipe_of_out, 0, sizeof pipe_of_out);
+	memset(pipe_mps_out, 0, sizeof pipe_mps_out);
+	memset(g_eps, 0, sizeof g_eps);
+	for (UInt8 i = 1; i <= n; i++) {
+		UInt8 dir = 0, num = 0, tt = 0, interval = 0;
+		UInt16 mps = 0;
+		r = (*g_if)->GetPipeProperties(g_if, i, &dir, &num, &tt, &mps, &interval);
+		if (r || num == 0 || num >= 16 || mps == 0 ||
+		    (dir != kUSBIn && dir != kUSBOut)) {
+			fprintf(stderr, "usb: invalid pipe %u (status=0x%x dir=%u ep=%u type=%u mps=%u)\n",
+				i, r, dir, num, tt, mps);
+			goto fail_open_interface;
+		}
+		if (tt == kUSBBulk) {
+			u8 *map = dir == kUSBIn ? &pipe_of_in[num] : &pipe_of_out[num];
+			if (*map) {
+				fprintf(stderr, "usb: duplicate bulk endpoint %s%u\n",
+					dir == kUSBIn ? "IN" : "OUT", num);
+				goto fail_open_interface;
+			}
+			*map = i; /* IOKit pipe references are one-based. */
+			if (dir == kUSBOut)
+				pipe_mps_out[num] = mps;
+		}
+		struct usb_endpoint_descriptor *e = &g_eps[i - 1].desc;
+		e->bLength = 7;
+		e->bDescriptorType = 5;
+		e->bEndpointAddress = num | (dir == kUSBIn ? USB_DIR_IN : 0);
+		e->bmAttributes = tt == kUSBBulk ? USB_ENDPOINT_XFER_BULK :
+				  tt == kUSBInterrupt ? USB_ENDPOINT_XFER_INT :
+				  tt == kUSBIsoc ? USB_ENDPOINT_XFER_ISOC : 0xff;
+		e->wMaxPacketSize = mps;
+		e->bInterval = interval;
+	}
+	/* This is the captured 2357:013f endpoint layout; fail closed on mismatch. */
+	if (!pipe_of_in[4] || !pipe_of_out[5] || !pipe_of_out[6] ||
+	    !pipe_of_out[7] || !pipe_of_out[9] || !pipe_of_out[10] ||
+	    !pipe_of_out[11] || !pipe_of_out[12]) {
+		fprintf(stderr, "usb: TX20U Plus endpoint set is incomplete; refusing probe\n");
+		goto fail_open_interface;
+	}
+
 	g_alt.desc.bNumEndpoints = n;
 	g_alt.endpoint = g_eps;
-	UInt8 spd = 0; (*g_dev)->GetDeviceSpeed(g_dev, &spd);
-	g_udev.speed = spd >= kUSBDeviceSpeedSuper ? USB_SPEED_SUPER : spd == kUSBDeviceSpeedHigh ? USB_SPEED_HIGH : spd == kUSBDeviceSpeedFull ? USB_SPEED_FULL : USB_SPEED_LOW;
+	(*g_dev)->GetDeviceSpeed(g_dev, &spd);
+	g_udev.speed = spd >= kUSBDeviceSpeedSuper ? USB_SPEED_SUPER :
+		spd == kUSBDeviceSpeedHigh ? USB_SPEED_HIGH :
+		spd == kUSBDeviceSpeedFull ? USB_SPEED_FULL : USB_SPEED_LOW;
 	g_intf.altsetting = &g_alt;
 	g_intf.cur_altsetting = &g_alt;
 	g_intf.udev = &g_udev;
 	g_intf.dev.name = "rtw89-usb";
 	g_rl_stop = 0;
-	pthread_create(&g_rl_thr, NULL, rl_thread, NULL);
+	if (pthread_create(&g_rl_thr, NULL, rl_thread, NULL) != 0) {
+		fprintf(stderr, "usb: failed to start IOKit event thread\n");
+		goto fail_open_interface;
+	}
 	g_rl_running = 1;
 	usleep(50000);
-	UInt16 v, p; (*g_dev)->GetDeviceVendor(g_dev, &v); (*g_dev)->GetDeviceProduct(g_dev, &p);
+	(*g_dev)->GetDeviceVendor(g_dev, &v);
+	(*g_dev)->GetDeviceProduct(g_dev, &p);
 	for (id = drv->id_table; id->idVendor; id++)
 		if (id->idVendor == v && id->idProduct == p) break;
-	fprintf(stderr, "usb: opened %04x:%04x speed=%s, %d endpoints\n", v, p, g_udev.speed == USB_SPEED_SUPER ? "SS" : "HS", n);
+	if (!id->idVendor) {
+		fprintf(stderr, "usb: matched device missing from id table\n");
+		goto fail_open_interface;
+	}
+	fprintf(stderr, "usb: opened %04x:%04x speed=%s, %d endpoints\n",
+		v, p, g_udev.speed == USB_SPEED_SUPER ? "SS" :
+		g_udev.speed == USB_SPEED_HIGH ? "HS" : "FS/LS", n);
 	return drv->probe(&g_intf, id);
-}
 
+fail_open_interface:
+	(*g_if)->USBInterfaceClose(g_if);
+fail_interface:
+	(*g_if)->Release(g_if);
+	g_if = NULL;
+fail_device:
+	(*g_dev)->USBDeviceClose(g_dev);
+	(*g_dev)->Release(g_dev);
+	g_dev = NULL;
+	return -EIO;
+}
 void kc_usb_disconnect(const struct usb_driver *drv)
 {
 	drv->disconnect(&g_intf);
@@ -329,6 +433,7 @@ void kc_usb_close(void)
 	if (g_dev) { (*g_dev)->USBDeviceClose(g_dev); (*g_dev)->Release(g_dev); g_dev = NULL; }
 	memset(pipe_of_in, 0, sizeof pipe_of_in);
 	memset(pipe_of_out, 0, sizeof pipe_of_out);
+	memset(pipe_mps_out, 0, sizeof pipe_mps_out);
 }
 
 /* true if a USB device with this vid:pid is attached (without opening it) */

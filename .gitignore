@@ -16,3 +16,6 @@ work/
 
 artifact-*
 
+__pycache__/
+*.py[cod]
+
